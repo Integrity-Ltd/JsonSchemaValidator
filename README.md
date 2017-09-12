@@ -1,4 +1,4 @@
-# JsonSchemaValidator
+# Json Schema Validator
 
 with libjsoncpp
 
