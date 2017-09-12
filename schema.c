@@ -37,9 +37,7 @@ using std::move;
     }
 
 namespace Json {
-
-namespace get
-{
+namespace get {
 
 template<typename Tp_>
 bool is(const Value & val) {
