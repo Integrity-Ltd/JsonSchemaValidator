@@ -7,52 +7,51 @@
 
 #include <jsoncpp/json/json.h>
 
-class Json_Schema_Validator {
+class Schema_Validator {
 public:
 	typedef Json::Value JSON;
 private:
-	std::stringstream sserror_;
-	bool result_;
-	const bool go_through_errors_;
-	const JSON &root_, &root_schema_;
-	class Ref_ {
-		const JSON * ptr_;
-		std::string position_;
+	std::stringstream m_error;
+	bool m_result;
+	const bool mc_go_through_errors;
+	const JSON & mcr_root, & mcr_root_schema;
+	// static std::map<const std::string, const std::string> ms_format;
+	class Ref {
+		const JSON * mcp_ptr;
+		std::string m_position;
 	public:
-		explicit Ref_(const JSON &);
-		explicit Ref_(const Ref_ &);
-		explicit Ref_(const JSON &, const std::string &);
-		explicit Ref_(const Ref_ & r, const std::string &);
-		explicit Ref_(const Ref_ & r, const int &);
-		void step_(const std::string &pos);
-		void step_(const int &i);
-		void forward_(const std::string &pos);
-		const std::string & get_position_() const;
-		const JSON & get_json_() const;
+		explicit Ref(const JSON &);
+        	Ref(const Ref &);
+		explicit Ref(const JSON &, const std::string &);
+		explicit Ref(const Ref &, const std::string &);
+		explicit Ref(const Ref &, const int &);
+		void step(const std::string &);
+		void step(const int &);
+		void forward(const std::string &);
+		const std::string & get_position() const;
+		const JSON & get_json() const;
 	};
-	// static std::map<const std::string, const std::string> format_;
-	std::stringstream & error_();
-	std::stringstream & error_(const Ref_ &);
-	void error_(const std::string &);
-	void error_(const Ref_ &, const std::string &);
-	Ref_ get_referece_(const JSON &, const std::string &);
-	void validate_array_(const Ref_ &, const JSON &);
-	void validate_object_(const Ref_ &, const JSON &);
-	void validate_string_(const Ref_ &, const JSON &);
-	void validate_number_(const Ref_ &, const JSON &);
-	void validate_integer_(const Ref_ &, const JSON &);
-	void validate_boolean_(const Ref_ &);
-	void validate_enum_(const Ref_ &, const JSON &);
-	bool validate_regex_(const std::string &, const std::string &);
-	bool validate_all_of_(const Ref_ &, const JSON &);
-	bool validate_any_of_(const Ref_ &, const JSON &);
-	bool validate_one_of_(const Ref_ &, const JSON &);
-	bool validate_not_(const Ref_ &, const JSON &);
-	void validate_(const Ref_ &, const JSON &, bool = true);
-	Json_Schema_Validator(const JSON & json, const Ref_ &, const JSON &schema,
-			bool = false);
+	std::stringstream & m_report();
+	std::stringstream & m_report(const Ref &);
+	void m_report(const std::string &);
+	void m_report(const Ref &, const std::string &);
+	Ref mc_get_referece(const JSON &, const std::string &) const;
+	void m_validate_array(const Ref &, const JSON &);
+	void m_validate_object(const Ref &, const JSON &);
+	void m_validate_string(const Ref &, const JSON &);
+	void m_validate_number(const Ref &, const JSON &);
+	void m_validate_integer(const Ref &, const JSON &);
+	void m_validate_boolean(const Ref &);
+	void m_validate_enum(const Ref &, const JSON &);
+	bool mc_validate_regex(const std::string &, const std::string &) const;
+	bool m_validate_all_of(const Ref &, const JSON &);
+	bool m_validate_any_of(const Ref &, const JSON &);
+	bool m_validate_one_of(const Ref &, const JSON &);
+	bool m_validate_not(const Ref &, const JSON &);
+	void m_validate(const Ref &, const JSON &, bool = true);
+	Schema_Validator(const JSON & json, const Ref_ &, const JSON &schema, bool = false);
 public:
-	Json_Schema_Validator(const JSON & json, const JSON & schema, bool = false);
+	Schema_Validator(const JSON & json, const JSON & schema, bool = false);
 	bool get_result() const;
 	std::string get_error() const;
 };
