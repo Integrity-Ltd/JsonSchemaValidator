@@ -200,13 +200,13 @@ Schema::Ref Schema::mc_get_referece(const Value & in, const string & ref) const 
       throw invalid_argument(ref + " is not a correct reference!");
     }
     unsigned i = 1;
-    Ref rtn(in);
+    Ref rtn_ref(in);
     if (ref[1] == '/') {
-      rtn = Ref(m_root, "#");
+      rtn_ref = Ref(m_root, "#");
       i++;
     }
-    rtn.forward(ref.substr(i));
-    return Rrtn);
+    rtn_ref.forward(ref.substr(i));
+    return rtn_ref;
   } catch (...) {
     throw invalid_argument(ref + " is not a correct reference!");
   }
