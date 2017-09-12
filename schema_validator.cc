@@ -25,9 +25,9 @@ using std::smatch;
 using std::regex_search;
 using std::remove_const_t;
 
-#define TERMINATE if (! go_through_errors_) return
+#define TERMINATE if (! mc_go_through_errors) return
 
-#define IF_TERMINATE  if (! result_ && ! go_through_errors_) return
+#define IF_TERMINATE  if (! m_result && ! mc_go_through_errors) return
 
 #define COND_TERMINATE(cond, message) \
     if (cond) {\
