@@ -60,7 +60,7 @@ public:
   Value & get_schema();
   const Value & get_schema() const;
 
-  void validate(const Value & json);
+  bool validate(const Value & json);
 
   bool get_result() const;
   std::string get_error() const;
