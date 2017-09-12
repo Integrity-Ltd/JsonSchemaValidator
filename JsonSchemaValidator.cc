@@ -1,433 +1,435 @@
 #include <list>
 #include <algorithm>
 #include <regex>
+#include <vector>
 
-#include "schema_validator.hh"
 #include "helper.hpp"
+#include "../schema_validator.hh"
+
+using std::find;
+using std::find_if;
+using std::all_of;
+using std::any_of;
+using std::none_of;
+using std::count_if;
+using std::sort;
+using std::adjacent_find;
+using std::string;
+using std::stringstream;
+using std::list;
+using std::vector;
+using std::invalid_argument;
+using std::stoi;
+using std::regex;
+using std::smatch;
+using std::regex_search;
+using std::remove_const_t;
 
 #define TERMINATE if (! go_through_errors_) return
+
 #define IF_TERMINATE  if (! result_ && ! go_through_errors_) return
 
-typedef Json_Schema_Validator::JSON JSON;
+#define COND_TERMINATE(cond, message) \
+    if (cond) {\
+        m_report(in) << " " << message << '\n';\
+        TERMINATE;\
+    }
 
-Json_Schema_Validator::Ref_::Ref_(const Ref_ & r) :
-		ptr_(r.ptr_), position_(r.position_) {
+typedef Schema_Validator::JSON JSON;
+
+template<typename Tp_>
+struct LESS {
+    static bool compare(const Tp_ & a, const Tp_ & b) {
+        return a <= b;
+    }
+    static bool compare_exclusive(const Tp_ & a, const Tp_ & b) {
+        return a < b;
+    }
+};
+
+template<typename Tp_>
+struct MORE {
+    static bool compare(const Tp_ & a, const Tp_ & b) {
+        return a >= b;
+    }
+    static bool compare_exclusive(const Tp_ & a, const Tp_ & b) {
+        return a > b;
+    }
+};
+
+// return std::find(array.begin(), array.end(), element);
+template<typename Array_, typename Element_>
+decltype(auto) find_element(const Array_ & array, const Element_ & element) {
+    return find(array.begin(), array.end(), element);
 }
 
-Json_Schema_Validator::Ref_::Ref_(const JSON & in) :
-		ptr_(&in), position_("#") {
+// return std::find(array.begin(), array.end(), element) != array.end();
+template<typename Array_, typename Element_>
+bool find_bool(const Array_ & array, const Element_ & element) {
+    return find_element(array, element) != array.end();
 }
 
-Json_Schema_Validator::Ref_::Ref_(const JSON & in, const std::string &pos) :
-		ptr_(&in), position_(pos) {
+bool is_unique(const JSON & json) {
+    vector<const JSON *> vec;
+    vec.reserve(json.size());
+    for (const auto & item : json) {
+        vec.push_back(&item);
+    }
+    sort(vec.begin(), vec.end(), [](const JSON * l, const JSON * r) { return *l < *r; });
+    return adjacent_find(vec.begin(), vec.end(), [](const JSON * l, const JSON * r) { return *l == *r; }) == vec.end();
 }
 
-Json_Schema_Validator::Ref_::Ref_(const Ref_ & r, const std::string &pos) :
-		ptr_(&(r.get_json_()[pos])), position_(r.position_ + "/" + pos) {
+JsonSchemaValidator::Ref::Ref(const Ref & r)
+    : mcp_ptr(r.mcp_ptr), m_position(r.m_position) {}
+
+JsonSchemaValidator::Ref::Ref(const JSON & in)
+    : mcp_ptr(&in), m_position("#") {}
+
+JsonSchemaValidator::Ref::Ref(const JSON & in, const string & pos)
+    : mcp_ptr(&in), m_position(pos) {}
+
+JsonSchemaValidator::Ref::Ref(const Ref & r, const string & pos)
+    : mcp_ptr(&(r.get_json()[pos])), m_position(r.m_position + "/" + pos) {}
+
+JsonSchemaValidator::Ref::Ref(const Ref & r, const int & i)
+    : mcp_ptr(&(r.get_json()[i])), m_position(r.m_position + "/" + to_string(i)) {}
+
+void JsonSchemaValidator::Ref::step(const string & pos) {
+    const auto & ref = *mcp_ptr;
+    if (ref.isArray()) {
+        mcp_ptr = &(ref[stoi(pos)]);
+    } else {
+        mcp_ptr = &(ref[pos]);
+    }
+    m_position += "/" + pos;
 }
 
-Json_Schema_Validator::Ref_::Ref_(const Ref_ & r, const int &i) :
-		ptr_(&(r.get_json_()[i])), position_(
-				r.position_ + "/" + std::to_string(i)) {
-}
-void Json_Schema_Validator::Ref_::step_(const std::string &pos) {
-	const JSON & ref = *ptr_;
-	if (ref.isArray()) {
-		ptr_ = &(ref[std::stoi(pos)]);
-	} else {
-		ptr_ = &(ref[pos]);
-	}
-	position_ += "/" + pos;
+void JsonSchemaValidator::Ref::step(const int & i) {
+    mcp_ptr = &(get_json()[i]);
+    m_position += "/" + std::to_string(i);
 
 }
 
-void Json_Schema_Validator::Ref_::step_(const int &i) {
-	ptr_ = &(get_json_()[i]);
-	position_ += "/" + std::to_string(i);
-
+void JsonSchemaValidator::Ref::forward(const string & pos) {
+    if (pos != "") {
+        string element = "";
+        for (unsigned i = 0; i < pos.length(); i++) {
+            if (pos[i] == '/') {
+                if (element.length() > 0) {
+                    step(element);
+                }
+                element = "";
+            } else {
+                element += pos[i];
+            }
+        }
+        if (element.length() > 0) {
+            step(element);
+        }
+    }
 }
 
-void Json_Schema_Validator::Ref_::forward_(const std::string &pos) {
-	if (pos != "") {
-		std::string element = "";
-		for (unsigned i = 0; i < pos.length(); i++) {
-			if (pos[i] == '/') {
-				if (element.length() > 0) {
-					step_(element);
-				}
-				element = "";
-			} else {
-				element += pos[i];
-			}
-		}
-		if (element.length() > 0) {
-			step_(element);
-		}
-	}
+const string & JsonSchemaValidator::Ref::get_position() const {
+    return m_position;
 }
 
-const std::string & Json_Schema_Validator::Ref_::get_position_() const {
-	return position_;
+const JSON & JsonSchemaValidator::Ref::get_json() const {
+    return *mcp_ptr;
 }
 
-const JSON & Json_Schema_Validator::Ref_::get_json_() const {
-	return *ptr_;
+JsonSchemaValidator::Ref JsonSchemaValidator::mc_get_referece(const JSON & in, const string & ref) const {
+    try {
+        if (ref[0] != '#') {
+            throw invalid_argument(ref + " is not a correct reference!");
+        }
+        unsigned i = 1;
+        Ref rtn(in);
+        if (ref[1] == '/') {
+            rtn = Ref(mcr_root, "#");
+            i++;
+        }
+        rtn.forward(ref.substr(i));
+        return Ref(rtn);
+    } catch (...) {
+        throw invalid_argument(ref + " is not a correct reference!");
+    }
 }
 
-Json_Schema_Validator::Ref_ Json_Schema_Validator::get_referece_(
-		const JSON & in, const std::string & ref) {
-	try {
-		if (ref[0] != '#') {
-			throw std::invalid_argument(ref + " is not a correct reference!");
-		}
-		unsigned i = 1;
-		Ref_ rtn(in);
-		if (ref[1] == '/') {
-			rtn = Ref_(root_, "#");
-			i++;
-		}
-		rtn.forward_(ref.substr(i));
-		return Ref_(rtn);
-	} catch (...) {
-		throw std::invalid_argument(ref + " is not a correct reference!");
-	}
+stringstream & JsonSchemaValidator::m_report() {
+    m_result = false;
+    return m_error;
 }
 
-std::stringstream & Json_Schema_Validator::error_() {
-	result_ = false;
-	return sserror_;
+stringstream & JsonSchemaValidator::m_report(const Ref & in) {
+    m_result = false;
+    m_error << in.get_position();
+    return m_error;
 }
 
-std::stringstream & Json_Schema_Validator::error_(const Ref_ &in) {
-	result_ = false;
-	sserror_ << in.get_position_();
-	return sserror_;
+void JsonSchemaValidator::m_report(const string & str) {
+    m_report() << " " << str << "\n";
 }
 
-void Json_Schema_Validator::error_(const std::string &str) {
-	error_() << " " << str << "\n";
+void JsonSchemaValidator::m_report(const Ref & in, const string & str) {
+    m_report(in) << " " << str << "\n";
 }
 
-void Json_Schema_Validator::error_(const Ref_ &in, const std::string &str) {
-	error_(in) << " " << str << "\n";
+template<template<typename > class alg_, typename Tp_>
+bool test_value(Tp_ test_value, const JSON & schema, const string & get, const string & exclusive) {
+    if (get::is<Tp_>(schema[get])) {
+        auto max = get::as<Tp_>(schema[get]);
+        if (get::is_as_bool(schema[exclusive])) {
+            if (alg_<Tp_>::compare(test_value, max)) {
+                return true;
+            }
+        }
+        if (alg_<Tp_>::compare_exclusive(test_value, max)) {
+            return true;
+        }
+    }
+    return false;
 }
 
-void Json_Schema_Validator::validate_array_(const Ref_ & in,
-		const JSON & schema) {
-	if (!in.get_json_().isArray()) {
-		error_(in) << " is not an array!" << '\n';
-		TERMINATE;
-	}
-	int size = in.get_json_().size();
-	if(test_value<algorithm::LESS>(size, schema, "minItems", "exclusiveMinimum")) {
-		error_(in) << " is below minimum!" << '\n';
-		TERMINATE;
-	}
-	if(test_value<algorithm::MORE>(size, schema, "maxItems", "exclusiveMaximum")) {
-		error_(in) << " is exceeds maximum!" << '\n';
-		TERMINATE;
-	}
-	if (get::is_as_bool(schema["uniqueItems"])) {
-		const auto end_ = in.get_json_().end();
-		for (auto it_1 = in.get_json_().begin(); it_1 != end_; ++it_1) {
-			for (auto it_2 = it_1; ++it_2 != end_; ) {
-				if (*it_1 == *it_2) {
-					error_(in) << " has not unique items!"<< '\n';
-					TERMINATE;
-				}
-			}
-		}
-	}
-	if (schema["items"].isObject()) {
-		for (int i = 0; i < size; i++) {
-			validate_(Ref_(in, i), schema["items"]);
-			IF_TERMINATE;
-		}
-	}
+void JsonSchemaValidator::m_validate_array(const Ref & in, const JSON & schema) {
+    COND_TERMINATE(!in.get_json().isArray(), "is not an array!");
+    const auto size = in.get_json().size();
+    COND_TERMINATE(test_value<LESS>(size, schema, "minItems", "exclusiveMinimum"), "is below minimum!");
+    COND_TERMINATE(test_value<MORE>(size, schema, "maxItems", "exclusiveMaximum"), "is exceeds maximum!");
+    if (get::is_as_bool(schema["uniqueItems"])) {
+        COND_TERMINATE(!is_unique(in.get_json()), "has not unique items!");
+    }
+    if (schema["items"].isObject()) {
+        for (remove_const_t<decltype(size)> i = 0; i < size; i++) {
+            m_validate(Ref(in, i), schema["items"][i]);
+            IF_TERMINATE;
+        }
+    }
 }
 
-void Json_Schema_Validator::validate_object_(const Ref_ & in,
-		const JSON & schema) {
-	if (!in.get_json_().isObject()) {
-		error_(in) << " is not an object!" << '\n';
-		TERMINATE;
-	}
-	std::list<std::string> inNames, schemaNames, requiedNames, additionalNames;
-	for (auto member : in.get_json_().getMemberNames()) {
-		inNames.push_back(member);
-	}
-	if (schema["properties"].isObject()) {
-		for (auto member : schema["properties"].getMemberNames()) {
-			schemaNames.push_back(member);
-		}
-	}
-	bool req = false;
-	if (schema["required"].isArray()) {
-		for (auto & member : schema["required"]) {
-			requiedNames.push_back(member.asString());
-		}
-		req = true;
-		if (inNames.size() < requiedNames.size()) {
-			error_(in) << "/" << " does not have enough element!"<< '\n';
-			TERMINATE;
-		}
-	}
-	unsigned add = 0;
-	if (get::is_as_bool(schema["additionalItems"]) || !schema["properties"].isObject()) {
-		add = 1;
-	} else if (schema["additionalItems"].isArray()) {
-		for (auto & member : schema["additionalItems"]) {
-			additionalNames.push_back(member.asString());
-		}
-		add = 2;
-		if (inNames.size() > additionalNames.size() + requiedNames.size()) {
-			error_(in) << "/" << " has too many element!"<< '\n';
-			TERMINATE;
-		}
-	}
-	for(auto member : inNames) {
-		auto it = find_element(schemaNames, member);
-		if (it != schemaNames.end()) {
-			validate_(Ref_(in, *it), schema["properties"][*it]);
-			requiedNames.remove(*it);
-		} else if (add == 2) {
-			if (!find_bool(additionalNames, member)) {
-				error_(in) << "/" << member <<" is not expected!"<< '\n';
-				TERMINATE;
-			}
-		} else if (add == 0) {
-			error_(in) << "/" << member <<" is not expected!"<< '\n';
-			TERMINATE;
-		}
-	}
-	if (req && requiedNames.size() > 0) {
-		error_(in) << "/" <<" not enough element, expected: "<< '\n';
-		for (const auto & member : requiedNames) {
-			sserror_ << member << ", ";
-		}
-		TERMINATE;
-	}
+void JsonSchemaValidator::m_validate_object(const Ref & in,
+    const JSON & schema) {
+    COND_TERMINATE(!in.get_json().isObject(), "is not an object!");
+    list<string> in_names, schema_names, requied_names, additional_names;
+    for (const auto & member : in.get_json().getMemberNames()) {
+        in_names.push_back(member);
+    }
+    if (schema["properties"].isObject()) {
+        for (const auto & member : schema["properties"].getMemberNames()) {
+            schema_names.push_back(member);
+        }
+    }
+    auto req = false;
+    if (schema["required"].isArray()) {
+        for (const auto & member : schema["required"]) {
+            requied_names.push_back(member.asString());
+        }
+        COND_TERMINATE(in_names.size() < requied_names.size(), "does not have enough element!");
+        req = true;
+    }
+    unsigned add = 0;
+    if (get::is_as_bool(schema["additionalItems"]) || !schema["properties"].isObject()) {
+        add = 1;
+    } else if (schema["additionalItems"].isArray()) {
+        for (const auto & member : schema["additionalItems"]) {
+            additional_names.push_back(member.asString());
+        }
+        COND_TERMINATE(in_names.size() > (additional_names.size() + requied_names.size()), "has too many element!");
+        add = 2;
+    }
+    for (const auto & member : in_names) {
+        const auto it = find_element(schema_names, member);
+        if (it != schema_names.end()) {
+            if (schema["properties"].isObject()) {
+                m_validate(Ref(in, *it), schema["properties"][*it]);
+                requied_names.remove(*it);
+            }
+        } else if (add == 2) {
+            COND_TERMINATE(!find_bool(additional_names, member), member << " is not expected!");
+        } else COND_TERMINATE(!find_bool(additional_names, member), member << " is not expected!");
+    }
+    if (req && requied_names.size() > 0) {
+        if (requied_names.size() > in_names.size()) {
+            m_report(in) << "/" << " not enough element, expected: " << '\n';
+            for (const auto & member : requied_names) {
+                m_error << member << ", ";
+            }
+            m_error.seekp(-1, m_error.cur);
+            m_error << ".";
+            TERMINATE;
+        } else {
+            const auto it = find_if(requied_names.begin(), requied_names.end(), [&in_names](const string & name) {
+                return find_bool(in_names, name);
+            });
+            if (it != requied_names.end()) {
+                m_report(in) << "/" << " some requied element(s) is/are missing, expected: " << '\n';
+                for (const auto & member : requied_names) {
+                    m_error << member << ", ";
+                }
+                m_error.seekp(-1, m_error.cur);
+                m_error << ".";
+                TERMINATE;
+            }
+        }
+    }
 }
 
-void Json_Schema_Validator::validate_string_(const Ref_ & in,
-		const JSON & schema) {
-	if (!in.get_json_().isString()) {
-		error_(in) << " is not a string!" << '\n';
-		TERMINATE;
-	} else {
-		std::string str = in.get_json_().asString();
-		if (schema["minLength"].isInt()) {
-			if (str.length() < (unsigned) schema["minLength"].asInt()) {
-				error_(in) << " is too short!"<< '\n';
-				TERMINATE;
-			}
-		}
-		if (schema["minLength"].isInt()) {
-			if (str.length() > (unsigned) schema["minLength"].asInt()) {
-				error_(in) << " is too long!"<< '\n';
-				TERMINATE;
-			}
-		}
-		if (schema["pattern"].isString()) {
-			if (!validate_regex_(str, schema["pattern"].asString())) {
-				error_(in) << " does not match regex pattern!"<< '\n';
-				TERMINATE;
-			}
-		}
-		if (schema["format"].isString()) {
-//		auto it = _format.find(schema["format"].asString());
-//		if (!validateRegex(str, it->second)) {
-//			error_(in) << "does not match regex pattern!"<< '\n';
-//			TERMINATE;
-//		}
-		}
-	}
+void JsonSchemaValidator::m_validate_string(const Ref & in,
+    const JSON & schema) {
+    COND_TERMINATE(!in.get_json().isString(), "is not an string!")
+    else {
+        const auto str = in.get_json().asString();
+        COND_TERMINATE(schema["minLength"].isInt() && str.length() < schema["minLength"].asUInt(), "is too short!");
+        COND_TERMINATE(schema["maxLength"].isInt() && str.length() > schema["maxLength"].asUInt(), "is too long!");
+        COND_TERMINATE(schema["pattern"].isString() && !mc_validate_regex(str, schema["pattern"].asString()), " does not match regex pattern!");
+        // COND_TERMINATE(schema["format"].isString() && !validateRegex(str, _format.find(schema["format"].asString())->second), " does not match regex pattern!");
+    }
 }
 
-void Json_Schema_Validator::validate_number_(const Ref_ & in,
-		const JSON & schema) {
-	if (!(in.get_json_().isInt64() || in.get_json_().isDouble())) {
-		error_(in) << " is not a number!";
-		TERMINATE;
-	} else {
-		double value = in.get_json_().asDouble();
-		if(test_value<algorithm::MORE>(value, schema, "maximum", "exclusiveMaximum")) {
-			error_(in) << " is exceeds maximum!" << '\n';
-			TERMINATE;
-		}
-		if(test_value<algorithm::LESS>(value, schema, "minimum", "exclusiveMinimum")) {
-			error_(in) << " is below minimum!" << '\n';
-			TERMINATE;
-		}
-	}
+void JsonSchemaValidator::m_validate_number(const Ref & in,
+    const JSON & schema) {
+    COND_TERMINATE(!(in.get_json().isInt64() || in.get_json().isDouble()), "is not a number!")
+    else {
+        const auto value = in.get_json().asDouble();
+        COND_TERMINATE(test_value<MORE>(value, schema, "maximum", "exclusiveMaximum"), "is exceeds maximum!");
+        COND_TERMINATE(test_value<LESS>(value, schema, "minimum", "exclusiveMinimum"), "is below minimum!");
+    }
 }
 
-void Json_Schema_Validator::validate_integer_(const Ref_ & in,
-		const JSON & schema) {
-	if (!in.get_json_().isInt()) {
-		error_(in) << " is not an integer!" << '\n';
-		TERMINATE;
-	} else {
-		auto value = in.get_json_().asInt64();
-		if ( !schema["multipleOf"].isNull()) {
-			auto multi = schema["multipleOf"].asInt64();
-			if (value % multi !=0) {
-				error_(in) << " is not a multiple!" << '\n';
-				TERMINATE;
-			}
-		}
-		validate_number_(in, schema);
-	}
+void JsonSchemaValidator::m_validate_integer(const Ref & in,
+    const JSON & schema) {
+    COND_TERMINATE(!in.get_json().isInt(), "is not an integer!")
+    else {
+        const auto value = in.get_json().asInt64();
+        if (!schema["multipleOf"].isNull()) {
+            const auto multi = schema["multipleOf"].asInt64();
+            COND_TERMINATE(value % multi != 0, "is not multiple of " << std::to_string(multi) << "!");
+        }
+        m_validate_number(in, schema);
+    }
 }
 
-void Json_Schema_Validator::validate_boolean_(const Ref_ & in) {
-	if (!in.get_json_().isBool()) {
-		error_(in) << " is not a boolean!" << '\n';
-	}
+void JsonSchemaValidator::m_validate_boolean(const Ref & in) {
+    if (!in.get_json().isBool()) {
+        m_report(in) << " is not a boolean!" << '\n';
+    }
 }
 
-void Json_Schema_Validator::validate_enum_(const Ref_ & in,
-		const JSON & schema) {
-	if (schema["enum"].isArray()) {
-		if (!find_bool(schema["enum"], in.get_json_())) {
-			error_(in) << " is not a correct enum!" << '\n';
-		}
-	}
+void JsonSchemaValidator::m_validate_enum(const Ref & in, const JSON & schema) {
+    if (schema["enum"].isArray()) {
+        if (!find_bool(schema["enum"], in.get_json())) {
+            m_report(in) << " is not a correct enum!" << '\n';
+        }
+    }
 }
 
-bool Json_Schema_Validator::validate_regex_(const std::string &str,
-		const std::string &regex) {
-	std::regex re(regex, std::regex::ECMAScript);
-	std::smatch sm;
-	if (!std::regex_search(str, sm, re)) {
-		return false;
-	}
-	return true;
+bool JsonSchemaValidator::mc_validate_regex(const string & str, const string & regex_str) const {
+    const regex re(regex_str, regex::ECMAScript);
+    smatch sm;
+    if (!regex_search(str, sm, re)) {
+        return false;
+    }
+    return true;
 }
 
-bool Json_Schema_Validator::validate_all_of_(const Ref_ &in,
-		const JSON &schema) {
-	for (const JSON & j : schema) {
-		Json_Schema_Validator jv(root_, in, j);
-		if (!jv.get_result()) {
-			sserror_ << "allOf fail: " << jv.get_error() << '\n';
-			return false;
-		}
-	}
-	return true;
+bool JsonSchemaValidator::m_validate_all_of(const Ref & in, const JSON & schema) {
+    return all_of(schema.begin(), schema.end(), [this, &in](const JSON & sch) {
+        JsonSchemaValidator jsv(mcr_root, in, sch);
+        if (!jsv.get_result()) {
+            m_error << "allOf fail: " << jsv.get_error() << '\n';
+            return false;
+        }
+        return true;
+    });
 }
 
-bool Json_Schema_Validator::validate_any_of_(const Ref_ &in,
-		const JSON &schema) {
-	for (const JSON & j : schema) {
-		Json_Schema_Validator jv(root_, in, j);
-		if (jv.get_result()) {
-			sserror_ << "anyOf success" << '\n';
-			return true;
-		} else {
-			sserror_ << "anyOf fail: " << jv.get_error() << '\n';
-		}
-	}
-	return false;
+bool JsonSchemaValidator::m_validate_any_of(const Ref & in, const JSON & schema) {
+    return any_of(schema.begin(), schema.end(), [this, &in](const JSON & sch) {
+        JsonSchemaValidator jsv(mcr_root, in, sch);
+        if (jsv.get_result()) {
+            m_error << "anyOf success" << '\n';
+            return true;
+        } else {
+            m_error << "anyOf fail: " << jsv.get_error() << '\n';
+            return false;
+        }
+    });
 }
 
-bool Json_Schema_Validator::validate_one_of_(const Ref_ &in,
-		const JSON &schema) {
-	int ctr = 0;
-	for (const JSON & j : schema) {
-		Json_Schema_Validator jv(root_, in, j);
-		if (jv.get_result()) {
-			ctr++;
-			if (ctr > 1)
-				break;
-		} else {
-			sserror_ << "oneOf fail: " << jv.get_error() << '\n';
-		}
-	}
-	return ctr == 1;
+bool JsonSchemaValidator::m_validate_one_of(const Ref & in, const JSON & schema) {
+    return 1 == count_if(schema.begin(), schema.end(), [&in, this](const JSON & in_schema) {
+        JsonSchemaValidator jv(mcr_root, in, in_schema);
+        if (jv.get_result()) {
+            return true;
+        } else {
+            m_error << "oneOf fail: " << jv.get_error() << '\n';
+            return false;
+        }
+    });
 }
 
-bool Json_Schema_Validator::validate_not_(const Ref_ &in, const JSON &schema) {
-	Json_Schema_Validator jv(root_, in, schema);
-	if (!jv.get_result()) {
-		sserror_ << in.get_position_() << "is ok to a \"NOT\" but should not";
-		return false;
-	}
-	return true;
+bool JsonSchemaValidator::m_validate_not(const Ref & in, const JSON & schema) {
+    return none_of(schema.begin(), schema.end(), [this, &in](const JSON & sch) {
+        JsonSchemaValidator jsv(mcr_root, in, sch);
+        if (jsv.get_result()) {
+            m_error << in.get_position() << " validate not fail\n";
+            return true;
+        }
+        return false;
+    });
 }
 
-void Json_Schema_Validator::validate_(const Ref_ & in, const JSON & schema,
-		bool allowRef) {
-	if (allowRef && schema["$ref"].isString()) {
-		Ref_ r(get_referece_(in.get_json_(), schema["$ref"].asString()));
-		validate_(
-				Ref_(get_referece_(in.get_json_(), schema["$ref"].asString())),
-				schema, false);
-		IF_TERMINATE;
-		return;
-	}
-	std::string saveError = sserror_.str();
-	if (schema["allOF"].isArray() && !validate_all_of_(in, schema["allOf"])) {
-		error_(in) << " ALL_OF!" << '\n';
-		TERMINATE;
-	}
-	if (schema["anyOf"].isArray() && !validate_any_of_(in, schema["anyOf"])) {
-		error_(in) << " ANY_OF!" << '\n';
-		TERMINATE;
-	}
-	if (schema["oneOf"].isArray() && !validate_one_of_(in, schema["oneOf"])) {
-		error_(in) << " ONE_OF!" << '\n';
-		TERMINATE;
-	}
-	if (schema["not"].isArray() && !validate_not_(in, schema["not"])) {
-		error_(in) << " NOT!" << '\n';
-		TERMINATE;
-	}
-	if (result_) {
-		sserror_.str("");
-		sserror_ << saveError;
-	}
-	if (schema["type"].isString()) {
-		std::string type = schema["type"].asString();
-		if (type == "object") {
-			validate_object_(in, schema);
-		} else if (type == "array") {
-			validate_array_(in, schema);
-		} else if (type == "string") {
-			validate_string_(in, schema);
-		} else if (type == "number") {
-			validate_number_(in, schema);
-		} else if (type == "integer") {
-			validate_integer_(in, schema);
-		} else if (type == "boolean") {
-			validate_boolean_(in);
-		} else if (type == "null" && !in.get_json_().isNull()) {
-			error_(in) << "is not a null!";
-		} else if (type == "not_null" && in.get_json_().isNull()) {
-			error_(in) << "is a null!";
-		}
-	}
-	validate_enum_(in, schema);
+void JsonSchemaValidator::m_validate(const Ref & in, const JSON & schema, bool allow_ref) {
+    if (allow_ref && schema["$ref"].isString()) {
+        m_validate(Ref(mc_get_referece(in.get_json(), schema["$ref"].asString())), schema, false);
+        IF_TERMINATE;
+        return;
+    }
+    const auto save_error = m_error.str();
+    COND_TERMINATE(schema["allOF"].isArray() && !m_validate_all_of(in, schema["allOf"]), "ALL_OF!");
+    COND_TERMINATE(schema["anyOF"].isArray() && !m_validate_any_of(in, schema["anyOf"]), "ANY_OF!");
+    COND_TERMINATE(schema["oneOF"].isArray() && !m_validate_one_of(in, schema["oneOf"]), "ONE_OF!");
+    COND_TERMINATE(schema["not"].isArray() && !m_validate_not(in, schema["not"]), "NOT!");
+    if (m_result) {
+        m_error.str("");
+        m_error << save_error;
+    }
+    if (schema["type"].isString()) {
+        const auto type = schema["type"].asString();
+        if (type == "object") {
+            m_validate_object(in, schema);
+        } else if (type == "array") {
+            m_validate_array(in, schema);
+        } else if (type == "string") {
+            m_validate_string(in, schema);
+        } else if (type == "number") {
+            m_validate_number(in, schema);
+        } else if (type == "integer") {
+            m_validate_integer(in, schema);
+        } else if (type == "boolean") {
+            m_validate_boolean(in);
+        } else if (type == "null" && !in.get_json().isNull()) {
+            m_report(in) << "is not a null!";
+        } else if (type == "not_null" && in.get_json().isNull()) {
+            m_report(in) << "is a null!";
+        }
+    }
+    m_validate_enum(in, schema);
 }
 
-Json_Schema_Validator::Json_Schema_Validator(const JSON &root, const Ref_ & in,
-		const JSON &schema, bool error) :
-		result_(true), go_through_errors_(error), root_(root), root_schema_(
-				schema) {
-	validate_(in, root_schema_);
+JsonSchemaValidator::JsonSchemaValidator(const JSON & root, const Ref & in, const JSON & schema, bool error)
+    : m_result(true), mc_go_through_errors(error), mcr_root(root), mcr_root_schema(schema) {
+    m_validate(in, mcr_root_schema);
 }
 
-Json_Schema_Validator::Json_Schema_Validator(const JSON &root,
-		const JSON &schema, bool error) :
-		result_(true), go_through_errors_(error), root_(root), root_schema_(
-				schema) {
-	validate_(Ref_(root_), root_schema_);
+JsonSchemaValidator::JsonSchemaValidator(const JSON & root, const JSON & schema, bool error)
+    : m_result(true), mc_go_through_errors(error), mcr_root(root), mcr_root_schema(schema) {
+    m_validate(Ref(mcr_root), mcr_root_schema);
 }
 
-bool Json_Schema_Validator::get_result() const {
-	return result_;
+bool JsonSchemaValidator::get_result() const {
+    return m_result;
 }
 
-std::string Json_Schema_Validator::get_error() const {
-	return sserror_.str();
+string JsonSchemaValidator::get_error() const {
+    return m_error.str();
 }
