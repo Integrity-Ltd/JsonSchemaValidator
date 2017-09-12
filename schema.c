@@ -1,9 +1,9 @@
-#include "schema.h"
-
 #include <list>
 #include <algorithm>
 #include <regex>
 #include <vector>
+
+#include "schema.h"
 
 using std::find;
 using std::find_if;
