@@ -492,11 +492,12 @@ Value & Schema::get_schema() { return m_schema; }
 
 const Value & Schema::get_schema() const { return m_schema; }
 
-void Schema::validate(const Value & json) {
+bool Schema::validate(const Value & json) {
   m_root = Ref(json);
   m_result = true;
   m_error.clear();
   m_validate(m_root, m_schema);
+  return m_result;
 }
 
 bool Schema::get_result() const {
