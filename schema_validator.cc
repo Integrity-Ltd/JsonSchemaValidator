@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "helper.hpp"
-#include "../schema_validator.hh"
+#include "schema_validator.hh"
 
 using std::find;
 using std::find_if;
